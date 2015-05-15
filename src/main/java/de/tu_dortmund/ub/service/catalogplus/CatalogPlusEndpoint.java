@@ -207,7 +207,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
             httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
             this.sendRequestError(httpServletResponse, requestError);
         }
-        /*else if (!service.equals("typeahead") && !this.format.equals("html") && !isUBintern) {
+        else if (!service.equals("typeahead") && !this.format.equals("html") && !isUBintern) {
 
             RequestError requestError = new RequestError();
             requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
@@ -216,7 +216,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
             httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
             this.sendRequestError(httpServletResponse, requestError);
-        }*/
+        }
         else if (service.equals("typeahead") && !this.format.equals("json")) {
 
             RequestError requestError = new RequestError();
@@ -281,52 +281,6 @@ public class CatalogPlusEndpoint extends HttpServlet {
                                         httpServletResponse.setContentType("text/html;charset=UTF-8");
                                         httpServletResponse.setStatus(HttpServletResponse.SC_OK);
                                         httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsHTML(requestParameter, renderParameters));
-
-                                        /*
-                                        if (Lookup.lookupAll(ObjectToHtmlTransformation.class).size() > 0) {
-
-                                            try {
-                                                ObjectToHtmlTransformation htmlTransformation = Lookup.lookup(ObjectToHtmlTransformation.class);
-                                                // init transformator
-                                                htmlTransformation.init(this.config);
-
-                                                HashMap<String, String> parameters = new HashMap<String, String>();
-                                                parameters.put("lang", this.language);
-                                                parameters.put("service", service);
-                                                parameters.put("isTUintern", Boolean.toString(this.isTUintern));
-                                                parameters.put("isUBintern", Boolean.toString(this.isUBintern));
-                                                parameters.put("debug", Boolean.toString(debug));
-
-                                                String mode = "";
-                                                if (httpServletRequest.getParameter("mode") != null) {
-
-                                                    mode = httpServletRequest.getParameter("mode");
-                                                }
-                                                parameters.put("mode", mode);
-
-                                                httpServletResponse.setContentType("text/html;charset=UTF-8");
-                                                httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                                httpServletResponse.getWriter().println(htmlTransformation.transform(resourceDiscoveryService.doSearchRequest(requestParameter), parameters));
-                                            }
-                                            catch (TransformationException e) {
-
-                                                this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_INTERNAL_SERVER_ERROR + " - " + e.getMessage());
-
-                                                RequestError requestError = new RequestError();
-                                                requestError.setCode(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-                                                requestError.setDescription(e.getMessage());
-                                                requestError.setError("SC_INTERNAL_SERVER_ERROR");
-
-                                                httpServletResponse.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
-                                                this.sendRequestError(httpServletResponse, requestError);
-                                            }
-                                        }
-                                        else {
-
-                                            this.logger.error("ObjectToHtmlTransformation not configured! Switch to JSON.");
-                                            this.format = "json";
-                                        }
-                                        */
                                     }
 
                                     if (this.format.equals("json")) {
@@ -376,6 +330,8 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
                                 if (this.format.equals("html")) {
 
+                                    httpServletResponse.setContentType("text/html;charset=UTF-8");
+
                                     Properties renderParameters = new Properties();
                                     renderParameters.setProperty("lang", this.language);
                                     renderParameters.setProperty("service", service);
@@ -396,13 +352,11 @@ public class CatalogPlusEndpoint extends HttpServlet {
                                         renderParameters.setProperty("getRecordsBaseURL", httpServletRequest.getRequestURL().toString() + "?ids=");
                                     }
 
-                                    httpServletResponse.setContentType("text/html;charset=UTF-8");
                                     if (mode.equals("embedded") || mode.equals("simplehit")) {
 
-                                        httpServletResponse.setContentType("application/xml;charset=UTF-8");
+                                        httpServletResponse.setContentType("text/xml");
                                     }
 
-                                    httpServletResponse.setContentType("text/html;charset=UTF-8");
                                     httpServletResponse.setStatus(HttpServletResponse.SC_OK);
                                     httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsHTML(requestParameter, renderParameters));
                                 }
