@@ -24,11 +24,14 @@ SOFTWARE.
 
 package de.tu_dortmund.ub.service.catalogplus.vcs;
 
+import java.util.HashMap;
 import java.util.Properties;
 
 public interface VirtualClassificationSystem {
 
     void init(Properties config);
+
+    HashMap<String,String> health(Properties properties);
 
     String getClassAsHTML(String notation, Properties renderParameters) throws VCSException;
 

@@ -36,12 +36,10 @@ import java.util.Properties;
 
 public class CatalogPlusService {
 
-    private static String conffile;
-
     public static void main( String[] args ) throws Exception {
 
         if (args.length == 1) {
-            conffile = args[0];
+            String conffile = args[0];
 
             // Init properties
             Properties config = new Properties();
@@ -81,12 +79,20 @@ public class CatalogPlusService {
 
             ServletHolder holderHome = new ServletHolder("static-home", DefaultServlet.class);
             holderHome.setInitParameter("resourceBase", config.getProperty("service.resourceBase"));
-            context.addServlet(holderHome,"/*");
+            context.addServlet(holderHome, "/*");
 
             context.setContextPath(config.getProperty("service.contextPath"));
             server.setHandler(context);
 
+            context.addServlet(new ServletHolder(new PingEndpoint(conffile)), config.getProperty("service.endpoint.ping"));
+
+            context.addServlet(new ServletHolder(new HealthEndpoint(conffile)), config.getProperty("service.endpoint.health"));
+
             context.addServlet(new ServletHolder(new CatalogPlusEndpoint(conffile)), config.getProperty("service.endpoint.catalogplus") + "/*");
+
+            //context.addServlet(new ServletHolder(new CatalogPlusResourceEndpoint(conffile)), config.getProperty("service.endpoint.resources") + "/*");
+
+            //context.addServlet(new ServletHolder(new CatalogPlusServiceEndpoint(conffile)), config.getProperty("service.endpoint.service") + "/*");
 
             server.start();
             server.join();

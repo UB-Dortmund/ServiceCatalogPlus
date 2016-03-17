@@ -24,11 +24,14 @@ SOFTWARE.
 
 package de.tu_dortmund.ub.service.catalogplus.rds;
 
+import java.util.HashMap;
 import java.util.Properties;
 
 public interface ResourceDiscoveryService {
 
-    void init(Properties config);
+    void init(Properties config, String service);
+
+    HashMap<String,String> health(Properties properties);
 
     String getSearchResultsAsHTML(Properties requestParameters, Properties renderParameters) throws RDSException;
 

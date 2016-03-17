@@ -33,9 +33,12 @@ import de.tu_dortmund.ub.util.impl.Lookup;
 import de.tu_dortmund.ub.util.impl.Mailer;
 import de.tu_dortmund.ub.util.output.ObjectToHtmlTransformation;
 import de.tu_dortmund.ub.util.output.TransformationException;
+import de.tu_dortmund.ub.util.rights.AnalyseIPRange;
 import org.apache.log4j.Logger;
 import org.apache.log4j.PropertyConfigurator;
 
+import javax.json.Json;
+import javax.json.JsonReader;
 import javax.mail.MessagingException;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -45,23 +48,19 @@ import javax.xml.bind.JAXBContext;
 import javax.xml.bind.JAXBException;
 import javax.xml.bind.Marshaller;
 import java.io.*;
+import java.net.URLDecoder;
 import java.util.Enumeration;
 import java.util.Properties;
 
 public class CatalogPlusEndpoint extends HttpServlet {
 
     // Configuration
-    private Properties config = new Properties();
-    private Logger logger = Logger.getLogger(CatalogPlusEndpoint.class.getName());
-
-    private String format;
-    private String language;
-    private boolean isTUintern;
-    private boolean isUBintern;
+    private Properties config = null;
+    private Logger logger = null;
 
     public CatalogPlusEndpoint() throws IOException {
 
-        this("conf/api-test.properties");
+        this("conf/config.properties");
     }
 
     public CatalogPlusEndpoint(String conffile) throws IOException {
@@ -74,6 +73,8 @@ public class CatalogPlusEndpoint extends HttpServlet {
                 BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, "UTF-8"));
 
                 try {
+
+                    this.config = new Properties();
                     this.config.load(reader);
 
                 } finally {
@@ -90,6 +91,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
         // init logger
         PropertyConfigurator.configure(this.config.getProperty("service.log4j-conf"));
+        this.logger = Logger.getLogger(CatalogPlusEndpoint.class.getName());
 
         this.logger.info("[" + this.config.getProperty("service.name") + "] " + "Starting 'CatalogPlusEndpoint' ...");
         this.logger.info("[" + this.config.getProperty("service.name") + "] " + "conf-file = " + conffile);
@@ -102,16 +104,22 @@ public class CatalogPlusEndpoint extends HttpServlet {
         httpServletResponse.addHeader("Access-Control-Allow-Headers", config.getProperty("Access-Control-Allow-Headers"));
         httpServletResponse.setHeader("Accept", config.getProperty("Accept"));
         httpServletResponse.setHeader("Access-Control-Allow-Origin", config.getProperty("Access-Control-Allow-Origin"));
+        httpServletResponse.setHeader("Cache-Control", config.getProperty("Cache-Control"));
 
         httpServletResponse.getWriter().println();
     }
 
     public void doGet(HttpServletRequest httpServletRequest, HttpServletResponse httpServletResponse) throws IOException {
 
-        httpServletResponse.setHeader("Access-Control-Allow-Origin", "*");
+        String format = null;
+        String language = null;
 
-        this.logger.debug("PathInfo = " + httpServletRequest.getPathInfo());
-        this.logger.debug("QueryString = " + httpServletRequest.getQueryString());
+        boolean isTUintern = false;
+        boolean isUBintern = false;
+        boolean is52bIBA = false;
+
+        httpServletResponse.setHeader("Access-Control-Allow-Origin", config.getProperty("Access-Control-Allow-Origin"));
+        httpServletResponse.setHeader("Cache-Control", config.getProperty("Cache-Control"));
 
         // analyse request path to define the service
         String path = httpServletRequest.getPathInfo();
@@ -132,20 +140,28 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
         this.logger.debug("service = " + service);
 
+        if (!service.contains("typeahead")) {
+            this.logger.info("PathInfo = " + httpServletRequest.getPathInfo());
+            this.logger.info("QueryString = " + httpServletRequest.getQueryString());
+        }
+
         // analyse ip range
         String ips = httpServletRequest.getHeader("X-Forwarded-For");
 
-        this.isTUintern = this.analyseAccessRights(ips, config.getProperty("service.iprange.tu"), config.getProperty("service.iprange.tu.exceptions"));
-        this.isUBintern = this.analyseAccessRights(ips, config.getProperty("service.iprange.ub"), config.getProperty("service.iprange.ub.exceptions"));
+        isTUintern = AnalyseIPRange.analyseAccessRights(ips, config.getProperty("service.iprange.tu"), config.getProperty("service.iprange.tu.exceptions"));
+        isUBintern = AnalyseIPRange.analyseAccessRights(ips, config.getProperty("service.iprange.ub"), config.getProperty("service.iprange.ub.exceptions"));
+        is52bIBA = AnalyseIPRange.analyseAccessRights(ips, config.getProperty("service.iprange.ub.52bIBAs"), config.getProperty("service.iprange.ub.52bIBAs.exceptions"));
 
-        this.logger.debug("[" + this.config.getProperty("service.name") + "] " + "Where is it from? " + httpServletRequest.getHeader("X-Forwarded-For") + ", " + isTUintern + ", " + isUBintern);
+        if (!service.contains("typeahead")) {
+            this.logger.info("[" + this.config.getProperty("service.name") + "] " + "Where is it from? " + httpServletRequest.getHeader("X-Forwarded-For") + ", " + isTUintern + ", " + isUBintern + ", " + is52bIBA);
+        }
 
         // format
-        this.format = "html";
+        format = "html";
 
         if (httpServletRequest.getParameter("format") != null && !httpServletRequest.getParameter("format").equals("")) {
 
-            this.format = httpServletRequest.getParameter("format");
+            format = httpServletRequest.getParameter("format");
         }
         else {
 
@@ -155,39 +171,43 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
                 if (headerNameKey.equals("Accept")) {
 
-                    this.logger.debug("headerNameKey = " + httpServletRequest.getHeader( headerNameKey ));
+                    if (!service.contains("typeahead")) {
+                        this.logger.info("headerNameKey = " + httpServletRequest.getHeader(headerNameKey));
+                    }
 
                     if (httpServletRequest.getHeader( headerNameKey ).contains("text/html")) {
-                        this.format = "html";
+                        format = "html";
                     }
                     else if (httpServletRequest.getHeader( headerNameKey ).contains("application/xml")) {
-                        this.format = "xml";
+                        format = "xml";
                     }
                     else if (httpServletRequest.getHeader( headerNameKey ).contains("application/json")) {
-                        this.format = "json";
+                        format = "json";
                     }
                 }
                 if (headerNameKey.equals("Accept-Language")) {
-                    this.language = httpServletRequest.getHeader( headerNameKey );
-                    this.logger.debug("[" + config.getProperty("service.name") + "] " + "Accept-Language: " + this.language);
+                    language = httpServletRequest.getHeader( headerNameKey );
+                    this.logger.debug("[" + config.getProperty("service.name") + "] " + "Accept-Language: " + language);
                 }
             }
         }
 
-        this.logger.info("format = " + this.format);
-
-        // language
-        if (this.language != null && this.language.startsWith("de")) {
-            this.language = "de";
-        } else if (this.language != null && this.language.startsWith("en")) {
-            this.language = "en";
-        } else if (httpServletRequest.getParameter("l") != null) {
-            this.language = httpServletRequest.getParameter("l");
-        } else {
-            this.language = "de";
+        if (!service.contains("typeahead")) {
+            this.logger.info("format = " + format);
         }
 
-        this.logger.info("language = " + this.language);
+        // language
+        if (language != null && language.startsWith("de")) {
+            language = "de";
+        } else if (language != null && language.startsWith("en")) {
+            language = "en";
+        } else if (httpServletRequest.getParameter("l") != null) {
+            language = httpServletRequest.getParameter("l");
+        } else {
+            language = "de";
+        }
+
+        this.logger.info("language = " + language);
 
         // Debugging
         boolean debug = false;
@@ -197,78 +217,86 @@ public class CatalogPlusEndpoint extends HttpServlet {
         }
 
         // is service valid?
-        if (!service.equals("search") && !service.equals("typeahead") && !service.equals("getRecords") && !service.equals("api")) {
+        if (!service.equals("search") && !service.equals("typeahead") && !service.equals("getRecords") && !service.equals("getRecordCount") && !service.equals("classification")) {
 
             RequestError requestError = new RequestError();
             requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
-            requestError.setDescription("The service '" + path + "' is not implemented.");
+            requestError.setDescription("The service '" + path + "' is not implemented. \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
             requestError.setError("BAD REQUEST");
 
             httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            this.sendRequestError(httpServletResponse, requestError);
+            this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
         }
-        else if (!service.equals("typeahead") && !this.format.equals("html") && !isUBintern) {
+        else if (!service.equals("typeahead") && !service.equals("getRecordCount") && !format.equals("html") && !isUBintern) {
 
             RequestError requestError = new RequestError();
             requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
-            requestError.setDescription("You are not allowed to request results in '" + this.format + "'!");
+            requestError.setDescription("You are not allowed to request results in '" + format + "'!");
             requestError.setError("BAD REQUEST");
 
             httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            this.sendRequestError(httpServletResponse, requestError);
+            this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
         }
-        else if (service.equals("typeahead") && !this.format.equals("json")) {
+        else if ((service.equals("typeahead") || service.equals("getRecordCount")) && !format.equals("json")) {
 
             RequestError requestError = new RequestError();
             requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
-            requestError.setDescription("Service 'typeahead' does not support format '" + this.format + "'!");
+            requestError.setDescription("Service '" + service + "' does not support format '" + format + "'!");
             requestError.setError("BAD REQUEST");
 
             httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-            this.sendRequestError(httpServletResponse, requestError);
+            this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
         }
         else {
 
             try {
 
-                if (service.equals("search") || service.equals("getRecords") || service.equals("typeahead")) {
+                if (service.equals("search") || service.equals("getRecords") || service.equals("typeahead") || service.equals("getRecordCount")) {
 
                     // Query
                     Properties requestParameter = this.handleRequestParameters(httpServletRequest);
-                    requestParameter.setProperty("lang", this.language);
+                    requestParameter.setProperty("lang", language);
 
                     // Resource Discovery Service API
                     if (Lookup.lookupAll(ResourceDiscoveryService.class).size() > 0) {
 
                         ResourceDiscoveryService resourceDiscoveryService = Lookup.lookup(ResourceDiscoveryService.class);
                         // init ResourceDiscoveryService
-                        resourceDiscoveryService.init(this.config);
+                        resourceDiscoveryService.init(this.config, service);
 
                         if (service.equals("search")) {
 
+                            // TODO Diese Prüfung muss in RDSSummon!!!
+                            int rows = 20;
+                            if (requestParameter.getProperty("rows") != null && !requestParameter.getProperty("rows").equals("")) {
+
+                                rows = Integer.parseInt(requestParameter.getProperty("rows"));
+                            }
+
                             if (requestParameter.getProperty("q").equals("") || requestParameter.getProperty("q").equals("*") || requestParameter.getProperty("q").equals("*:*") ||
-                                    (!requestParameter.getProperty("rows").equals("") && Integer.parseInt(requestParameter.getProperty("rows")) > 50) ||
-                                    (!requestParameter.getProperty("start").equals("") && Integer.parseInt(requestParameter.getProperty("start")) > 20)) {
+                                    (requestParameter.getProperty("rows") != null && !requestParameter.getProperty("rows").equals("") && Integer.parseInt(requestParameter.getProperty("rows")) > 50) ||
+                                    (requestParameter.getProperty("start") != null && !requestParameter.getProperty("start").equals("") && Integer.parseInt(requestParameter.getProperty("start")) > 1000 / rows)) {
 
                                 RequestError requestError = new RequestError();
                                 requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
-                                requestError.setDescription("Malformed request!");
+                                requestError.setDescription("Malformed request! \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
                                 requestError.setError("BAD REQUEST");
 
                                 httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                                this.sendRequestError(httpServletResponse, requestError);
+                                this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                             }
                             else {
                                 // Query
                                 try {
 
-                                    if (this.format.equals("html")) {
+                                    if (format.equals("html")) {
 
                                         Properties renderParameters = new Properties();
-                                        renderParameters.setProperty("lang", this.language);
+                                        renderParameters.setProperty("lang", language);
                                         renderParameters.setProperty("service", service);
-                                        renderParameters.setProperty("isTUintern", Boolean.toString(this.isTUintern));
-                                        renderParameters.setProperty("isUBintern", Boolean.toString(this.isUBintern));
+                                        renderParameters.setProperty("isTUintern", Boolean.toString(isTUintern));
+                                        renderParameters.setProperty("isUBintern", Boolean.toString(isUBintern));
+                                        renderParameters.setProperty("is52bIBA", Boolean.toString(is52bIBA));
                                         renderParameters.setProperty("debug", Boolean.toString(debug));
 
                                         String mode = "";
@@ -283,16 +311,22 @@ public class CatalogPlusEndpoint extends HttpServlet {
                                         httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsHTML(requestParameter, renderParameters));
                                     }
 
-                                    if (this.format.equals("json")) {
+                                    if (format.equals("json")) {
 
-                                        httpServletResponse.setContentType("application/json");
+                                        if (!isUBintern) {
+                                            this.logger.error("[" + this.config.getProperty("service.name") + "] Uncontrolled JSON request! ");
+                                        }
+
+                                        Thread.sleep(150);
+
+                                        httpServletResponse.setContentType("application/json;charset=UTF-8");
                                         httpServletResponse.setStatus(HttpServletResponse.SC_OK);
                                         httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsJSON(requestParameter));
                                     }
 
-                                    if (this.format.equals("xml")) {
+                                    if (format.equals("xml")) {
 
-                                        httpServletResponse.setContentType("application/xml");
+                                        httpServletResponse.setContentType("application/xml;charset=UTF-8");
                                         httpServletResponse.setStatus(HttpServletResponse.SC_OK);
                                         httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsXML(requestParameter));
                                     }
@@ -303,89 +337,180 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
                                     RequestError requestError = new RequestError();
                                     requestError.setCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                                    requestError.setDescription(e.getMessage());
+                                    requestError.setDescription(e.getMessage() + " \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
                                     requestError.setError("SERVICE_UNAVAILABLE");
 
                                     httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                                    this.sendRequestError(httpServletResponse, requestError);
+                                    this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                                 }
+                            }
+                        }
+                        else if (service.equals("getRecordCount")) {
+
+                            if (httpServletRequest.getParameter("q") != null) {
+
+                                int rows = 0;
+                                if (requestParameter.getProperty("rows") != null && !requestParameter.getProperty("rows").equals("")) {
+
+                                    rows = Integer.parseInt(requestParameter.getProperty("rows"));
+                                }
+
+                                if (requestParameter.getProperty("q").equals("") || requestParameter.getProperty("q").equals("*") || requestParameter.getProperty("q").equals("*:*") ||
+                                        (requestParameter.getProperty("rows") != null && !requestParameter.getProperty("rows").equals("") && Integer.parseInt(requestParameter.getProperty("rows")) > 50) ||
+                                        (requestParameter.getProperty("start") != null && !requestParameter.getProperty("start").equals("") && Integer.parseInt(requestParameter.getProperty("start")) > 1000 / rows)) {
+
+                                    RequestError requestError = new RequestError();
+                                    requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
+                                    requestError.setDescription("Malformed request! \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
+                                    requestError.setError("BAD REQUEST");
+
+                                    httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                                    this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
+                                } else {
+                                    // Query
+                                    try {
+
+                                        if (format.equals("json")) {
+
+                                            if (!isUBintern) {
+                                                this.logger.error("[" + this.config.getProperty("service.name") + "] Uncontrolled JSON request! ");
+                                            }
+
+                                            String resultsJsonString = resourceDiscoveryService.getSearchResultsAsJSON(requestParameter);
+
+                                            // TODO parse recordCount
+                                            JsonReader rdr = Json.createReader(new StringReader(resultsJsonString));
+
+                                            String recordCount = rdr.readObject().getJsonNumber("recordCount").toString();
+
+                                            String jsonString = "{";
+                                            jsonString += "\"recordCount\" : \"" + recordCount + "\"";
+                                            jsonString += "}";
+
+                                            this.logger.info("jsonString = " + jsonString);
+
+                                            Thread.sleep(150);
+
+                                            httpServletResponse.setContentType("application/json;charset=UTF-8");
+                                            httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                                            httpServletResponse.getWriter().println(jsonString);
+                                        }
+                                    } catch (RDSException e) {
+
+                                        this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_SERVICE_UNAVAILABLE + " - " + e.getMessage());
+
+                                        RequestError requestError = new RequestError();
+                                        requestError.setCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                                        requestError.setDescription(e.getMessage() + " \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
+                                        requestError.setError("SERVICE_UNAVAILABLE");
+
+                                        httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                                        this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
+                                    }
+                                }
+                            }
+                            else {
+
+                                RequestError requestError = new RequestError();
+                                requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
+                                requestError.setDescription("Malformed request! \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
+                                requestError.setError("BAD REQUEST");
+
+                                httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                                this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                             }
                         }
                         else if (service.equals("getRecords")) {
 
-                            String institution_param = "";
-                            if (httpServletRequest.getQueryString().contains("fq=Institution")) {
+                            if (httpServletRequest.getQueryString() != null && !httpServletRequest.getQueryString().equals("")) {
 
-                                for (String r : httpServletRequest.getParameterMap().keySet()) {
+                                String institution_param = "";
+                                if (httpServletRequest.getQueryString().contains("fq=Institution")) {
 
-                                    if (r.equals("fq") && httpServletRequest.getParameter(r).startsWith("Institution")) {
-                                        institution_param = "&fq=" + httpServletRequest.getParameter(r);
-                                        break;
+                                    for (String r : httpServletRequest.getParameterMap().keySet()) {
+
+                                        if (r.equals("fq") && httpServletRequest.getParameter(r).startsWith("Institution")) {
+                                            institution_param = "&fq=" + httpServletRequest.getParameter(r);
+                                            break;
+                                        }
+                                    }
+                                    this.logger.debug("[" + this.config.getProperty("service.name") + "] " + "institution_param: " + institution_param);
+                                }
+
+                                try {
+
+                                    if (format.equals("html")) {
+
+                                        httpServletResponse.setContentType("text/html;charset=UTF-8");
+
+                                        Properties renderParameters = new Properties();
+                                        renderParameters.setProperty("lang", language);
+                                        renderParameters.setProperty("service", service);
+                                        renderParameters.setProperty("isTUintern", Boolean.toString(isTUintern));
+                                        renderParameters.setProperty("isUBintern", Boolean.toString(isUBintern));
+                                        renderParameters.setProperty("is52bIBA", Boolean.toString(is52bIBA));
+                                        renderParameters.setProperty("debug", Boolean.toString(debug));
+
+                                        renderParameters.setProperty("recordset", institution_param);
+
+                                        String mode = "";
+                                        if (httpServletRequest.getParameter("mode") != null) {
+
+                                            mode = httpServletRequest.getParameter("mode");
+                                        }
+                                        renderParameters.setProperty("mode", mode);
+                                        if (mode.equals("simplehit")) {
+
+                                            renderParameters.setProperty("getRecordsBaseURL", httpServletRequest.getRequestURL().toString() + "?ids=");
+                                        }
+
+                                        if (mode.equals("embedded") /*|| mode.equals("simplehit")*/) {
+
+                                            httpServletResponse.setContentType("application/xml;charset=UTF-8");
+                                        }
+
+                                        httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                                        httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsHTML(requestParameter, renderParameters));
+                                    }
+
+                                    if (format.equals("json")) {
+
+                                        httpServletResponse.setContentType("application/json;charset=UTF-8");
+                                        httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                                        httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsJSON(requestParameter));
+                                    }
+
+                                    if (format.equals("xml")) {
+
+                                        httpServletResponse.setContentType("application/xml;charset=UTF-8");
+                                        httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                                        httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsXML(requestParameter));
                                     }
                                 }
-                                this.logger.debug("[" + this.config.getProperty("service.name") + "] " + "institution_param: " + institution_param);
+                                catch (RDSException e) {
+
+                                    this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_SERVICE_UNAVAILABLE + " - " + e.getMessage());
+
+                                    RequestError requestError = new RequestError();
+                                    requestError.setCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                                    requestError.setDescription(e.getMessage() + " \n" + "\tQuery: " + httpServletRequest.getQueryString() + "\n" + "\tIP: " + httpServletRequest.getHeader("X-Forwarded-For"));
+                                    requestError.setError("SERVICE_UNAVAILABLE");
+
+                                    httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+                                    this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
+                                }
                             }
+                            else {
 
-                            try {
-
-                                if (this.format.equals("html")) {
-
-                                    httpServletResponse.setContentType("text/html;charset=UTF-8");
-
-                                    Properties renderParameters = new Properties();
-                                    renderParameters.setProperty("lang", this.language);
-                                    renderParameters.setProperty("service", service);
-                                    renderParameters.setProperty("isTUintern", Boolean.toString(this.isTUintern));
-                                    renderParameters.setProperty("isUBintern", Boolean.toString(this.isUBintern));
-                                    renderParameters.setProperty("debug", Boolean.toString(debug));
-
-                                    renderParameters.setProperty("recordset", institution_param);
-
-                                    String mode = "";
-                                    if (httpServletRequest.getParameter("mode") != null) {
-
-                                        mode = httpServletRequest.getParameter("mode");
-                                    }
-                                    renderParameters.setProperty("mode", mode);
-                                    if (mode.equals("simplehit")) {
-
-                                        renderParameters.setProperty("getRecordsBaseURL", httpServletRequest.getRequestURL().toString() + "?ids=");
-                                    }
-
-                                    if (mode.equals("embedded") || mode.equals("simplehit")) {
-
-                                        httpServletResponse.setContentType("text/xml");
-                                    }
-
-                                    httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                    httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsHTML(requestParameter, renderParameters));
-                                }
-
-                                if (this.format.equals("json")) {
-
-                                    httpServletResponse.setContentType("application/json");
-                                    httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                    httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsJSON(requestParameter));
-                                }
-
-                                if (this.format.equals("xml")) {
-
-                                    httpServletResponse.setContentType("application/xml");
-                                    httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                    httpServletResponse.getWriter().println(resourceDiscoveryService.getSearchResultsAsXML(requestParameter));
-                                }
-                            }
-                            catch (RDSException e) {
-
-                                this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_SERVICE_UNAVAILABLE + " - " + e.getMessage());
+                                this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_BAD_REQUEST + " - " + "Bad Request!");
 
                                 RequestError requestError = new RequestError();
-                                requestError.setCode(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                                requestError.setDescription(e.getMessage());
-                                requestError.setError("SERVICE_UNAVAILABLE");
+                                requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
+                                requestError.setDescription("No record ids defined!");
+                                requestError.setError("BAD_REQUEST");
 
-                                httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                                this.sendRequestError(httpServletResponse, requestError);
+                                httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                                this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                             }
                         }
                         else if (service.equals("typeahead")) {
@@ -403,8 +528,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
                                 httpServletResponse.setContentType("application/json;charset=utf-8");
                                 httpServletResponse.setStatus(HttpServletResponse.SC_OK);
                                 httpServletResponse.getWriter().println(json);
-                            }
-                            catch (RDSException e) {
+                            } catch (RDSException e) {
 
                                 this.logger.error("[" + this.config.getProperty("service.name") + "] Exception: " + HttpServletResponse.SC_SERVICE_UNAVAILABLE + " - " + e.getMessage());
 
@@ -414,7 +538,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
                                 requestError.setError("SERVICE_UNAVAILABLE");
 
                                 httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                                this.sendRequestError(httpServletResponse, requestError);
+                                this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                             }
                         }
                     }
@@ -428,57 +552,66 @@ public class CatalogPlusEndpoint extends HttpServlet {
                         requestError.setError("SERVICE_UNAVAILABLE");
 
                         httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                        this.sendRequestError(httpServletResponse, requestError);
+                        this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                     }
                 }
                 else {
 
                     if (Lookup.lookupAll(VirtualClassificationSystem.class).size() > 0) {
 
+                        String notation = "";
+
                         if (httpServletRequest.getParameter("class") != null && !httpServletRequest.getParameter("class").equals("")) {
 
-                            VirtualClassificationSystem virtualClassificationSystem = Lookup.lookup(VirtualClassificationSystem.class);
-                            // init VirtualClassificationSystem
-                            virtualClassificationSystem.init(this.config);
-
-                            if (this.format.equals("html")) {
-
-                                Properties renderParameters = new Properties();
-                                renderParameters.setProperty("lang", this.language);
-                                renderParameters.setProperty("isTUintern", Boolean.toString(this.isTUintern));
-                                renderParameters.setProperty("isUBintern", Boolean.toString(this.isUBintern));
-                                renderParameters.setProperty("debug", Boolean.toString(debug));
-
-                                httpServletResponse.setContentType("text/html;charset=UTF-8");
-                                httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsHTML(httpServletRequest.getParameter("class"), renderParameters));
-                            }
-
-                            if (this.format.equals("json")) {
-
-                                httpServletResponse.setContentType("application/json;charset=UTF-8");
-                                httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsJSON(httpServletRequest.getParameter("class")));
-                            }
-
-                            if (this.format.equals("xml")) {
-
-                                httpServletResponse.setContentType("application/xml;charset=UTF-8");
-                                httpServletResponse.setStatus(HttpServletResponse.SC_OK);
-                                httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsXML(httpServletRequest.getParameter("class")));
-                            }
+                            notation = httpServletRequest.getParameter("class");
                         }
-                        else {
 
-                            httpServletResponse.sendError(HttpServletResponse.SC_BAD_REQUEST, "Class parameter not valid!");
+                        VirtualClassificationSystem virtualClassificationSystem = Lookup.lookup(VirtualClassificationSystem.class);
+                        // init VirtualClassificationSystem
+                        virtualClassificationSystem.init(this.config);
 
-                            RequestError requestError = new RequestError();
-                            requestError.setCode(HttpServletResponse.SC_BAD_REQUEST);
-                            requestError.setDescription("Class parameter not valid!");
-                            requestError.setError("BAD_REQUEST");
+                        if (format.equals("html")) {
 
-                            httpServletResponse.setStatus(HttpServletResponse.SC_BAD_REQUEST);
-                            this.sendRequestError(httpServletResponse, requestError);
+                            Properties renderParameters = new Properties();
+                            renderParameters.setProperty("lang", language);
+                            renderParameters.setProperty("service", service);
+                            renderParameters.setProperty("notation", notation);
+                            renderParameters.setProperty("isTUintern", Boolean.toString(isTUintern));
+                            renderParameters.setProperty("isUBintern", Boolean.toString(isUBintern));
+                            renderParameters.setProperty("is52bIBA", Boolean.toString(is52bIBA));
+                            renderParameters.setProperty("debug", Boolean.toString(debug));
+
+                            String mode = "";
+                            if (httpServletRequest.getParameter("mode") != null) {
+
+                                mode = httpServletRequest.getParameter("mode");
+                            }
+                            renderParameters.setProperty("mode", mode);
+
+                            String queryString = "";
+                            if (httpServletRequest.getParameter("queryString") != null) {
+
+                                queryString = httpServletRequest.getParameter("queryString");
+                            }
+                            renderParameters.setProperty("queryString", URLDecoder.decode(queryString,"UTF-8"));
+
+                            httpServletResponse.setContentType("text/html;charset=UTF-8");
+                            httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                            httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsHTML(notation, renderParameters));
+                        }
+
+                        if (format.equals("json")) {
+
+                            httpServletResponse.setContentType("application/json;charset=UTF-8");
+                            httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                            httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsJSON(notation));
+                        }
+
+                        if (format.equals("xml")) {
+
+                            httpServletResponse.setContentType("application/xml;charset=UTF-8");
+                            httpServletResponse.setStatus(HttpServletResponse.SC_OK);
+                            httpServletResponse.getWriter().println(virtualClassificationSystem.getClassAsXML(notation));
                         }
                     }
                     else {
@@ -491,7 +624,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
                         requestError.setError("SERVICE_UNAVAILABLE");
 
                         httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                        this.sendRequestError(httpServletResponse, requestError);
+                        this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
                     }
                 }
             }
@@ -512,50 +645,9 @@ public class CatalogPlusEndpoint extends HttpServlet {
                 requestError.setError("SERVICE_UNAVAILABLE");
 
                 httpServletResponse.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-                this.sendRequestError(httpServletResponse, requestError);
+                this.sendRequestError(httpServletResponse, requestError, format, language, isUBintern, isTUintern, is52bIBA);
             }
         }
-    }
-
-    private boolean analyseAccessRights(String ips, String iprange, String ipexceptions) {
-
-        boolean allowed = false;
-
-        try {
-            if (ips != null) {
-
-                String tmp[] = ips.split(", ");
-                String ip = tmp[tmp.length - 1];
-
-                String[] ranges = iprange.split("\\|");
-                for (String range : ranges) {
-
-                    if (ip.matches(range)) {
-
-                        allowed = true;
-                        break;
-                    }
-                }
-
-                String[] exceptions = ipexceptions.split("\\|");
-                if (allowed) {
-
-                    for (String exception : exceptions) {
-
-                        if (ip.matches(exception)) {
-
-                            allowed = false;
-                            break;
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-
-            this.logger.error(e.getMessage(), e.getCause());
-        }
-
-        return allowed;
     }
 
     private Properties handleRequestParameters(HttpServletRequest httpServletRequest) {
@@ -613,6 +705,11 @@ public class CatalogPlusEndpoint extends HttpServlet {
         if (httpServletRequest.getParameter("ids") != null) {
             ids = httpServletRequest.getParameter("ids");
         }
+        // smaller search for record counts in classification search
+        String type = "full";
+        if (httpServletRequest.getParameter("type") != null && httpServletRequest.getParameter("type").equals("light")) {
+            type = "light";
+        }
 
         Properties requestParameter = new Properties();
         requestParameter.setProperty("q", q);
@@ -625,6 +722,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
         requestParameter.setProperty("group", group);
         requestParameter.setProperty("local", local);
         requestParameter.setProperty("holdings", holdings);
+        requestParameter.setProperty("type", type);
 
         if (httpServletRequest.getParameter("news") != null && httpServletRequest.getParameter("news").equals("false")) {
             requestParameter.setProperty("news", "false");
@@ -647,14 +745,14 @@ public class CatalogPlusEndpoint extends HttpServlet {
         return requestParameter;
     }
 
-    private void sendRequestError(HttpServletResponse httpServletResponse, RequestError requestError) {
+    private void sendRequestError(HttpServletResponse httpServletResponse, RequestError requestError, String format, String language, boolean isUBintern, boolean isTUintern, boolean is52bIBA) {
 
-        if (requestError.getCode() == HttpServletResponse.SC_SERVICE_UNAVAILABLE || requestError.getCode() == HttpServletResponse.SC_INTERNAL_SERVER_ERROR) {
+        if (requestError.getCode() == HttpServletResponse.SC_BAD_REQUEST || requestError.getCode() == HttpServletResponse.SC_SERVICE_UNAVAILABLE || requestError.getCode() == HttpServletResponse.SC_INTERNAL_SERVER_ERROR) {
 
             try {
 
                 Mailer mailer = new Mailer(this.config.getProperty("service.mailer.conf"));
-                mailer.postMail("[" + this.config.getProperty("service.name") + "] Exception: " + requestError.getCode() + " Service unavailable.", requestError.getDescription());
+                mailer.postMail("[" + this.config.getProperty("service.name") + "] Exception: " + requestError.getCode(), requestError.getDescription());
 
             } catch (MessagingException | IOException e1) {
 
@@ -664,13 +762,11 @@ public class CatalogPlusEndpoint extends HttpServlet {
 
         ObjectMapper mapper = new ObjectMapper();
 
-        httpServletResponse.setHeader("WWW-Authentificate", "Bearer");
-        httpServletResponse.setHeader("WWW-Authentificate", "Bearer realm=\"PAIA auth\"");
-        httpServletResponse.setContentType("application/json");
+        httpServletResponse.setContentType("application/json;charset=UTF-8");
 
         try {
 
-            if (this.format.equals("html")) {
+            if (format.equals("html")) {
 
                 if (Lookup.lookupAll(ObjectToHtmlTransformation.class).size() > 0) {
 
@@ -680,9 +776,10 @@ public class CatalogPlusEndpoint extends HttpServlet {
                         htmlTransformation.init(this.config);
 
                         Properties parameters = new Properties();
-                        parameters.setProperty("lang", this.language);
+                        parameters.setProperty("lang", language);
                         parameters.setProperty("isTUintern", Boolean.toString(isTUintern));
                         parameters.setProperty("isUBintern", Boolean.toString(isUBintern));
+                        parameters.setProperty("is52bIBA", Boolean.toString(is52bIBA));
 
                         httpServletResponse.setContentType("text/html;charset=UTF-8");
                         httpServletResponse.setStatus(HttpServletResponse.SC_OK);
@@ -694,12 +791,12 @@ public class CatalogPlusEndpoint extends HttpServlet {
                 }
                 else {
                     this.logger.error("ObjectToHtmlTransformation not configured! Switch to JSON.");
-                    this.format = "json";
+                    format = "json";
                 }
             }
 
             // XML-Ausgabe mit JAXB
-            if (this.format.equals("xml")) {
+            if (format.equals("xml")) {
 
                 try {
 
@@ -717,7 +814,7 @@ public class CatalogPlusEndpoint extends HttpServlet {
             }
 
             // JSON-Ausgabe mit Jackson
-            if (this.format.equals("json")) {
+            if (format.equals("json")) {
 
                 httpServletResponse.setContentType("application/json;charset=UTF-8");
                 mapper.writeValue(httpServletResponse.getWriter(), requestError);
