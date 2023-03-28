@@ -1,10 +1,5 @@
----
+**HINT: This project is out of date and internally not relevant anymore!**
 
-![TU Dortmund Logo](http://www.ub.tu-dortmund.de/images/tu-logo.png)
-
-![UB Dortmund Logo](http://www.ub.tu-dortmund.de/images/ub-schriftzug.jpg)
-
----
 
 # Service "CatalogPlus" - Eine Fassade für einen *Resource Discovery Index*
 
